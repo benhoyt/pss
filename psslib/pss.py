@@ -26,8 +26,17 @@ def main(argv=sys.argv, output_formatter=None):
         output_formatter:
             An OutputFormatter object to emit output to. Set to None for
             the default.
+
+        return:
+            Return code to be used when exiting to system.
+            0: Match found or help/version printed. 1: No match. 2: Error.
     """
-    options, args, optparser = parse_cmdline(argv[1:])
+    try:
+        options, args, optparser = parse_cmdline(argv[1:])
+    except VersionPrinted:
+        return 0
+    except SystemExit:
+        return 2
 
     # Handle --type-add-pattern, which modifies driver.TYPE_MAP
     #
@@ -71,11 +80,14 @@ def main(argv=sys.argv, output_formatter=None):
     # without arguments.
     if options.help_types:
         print_help_types()
-        sys.exit(0)
+        return 0
+    elif options.show_type_list:
+        show_type_list()
+        return 0
     elif (len(args) == 0 and search_pattern_expected) or options.help:
         optparser.print_help()
         print(DESCRIPTION_AFTER_USAGE)
-        sys.exit(0)
+        return 0
 
     # Unpack args. If roots are not specified, the current directory is the
     # only root. If no search pattern is expected, the whole of 'args' is roots.
@@ -114,7 +126,8 @@ def main(argv=sys.argv, output_formatter=None):
     # Finally, invoke pss_run with the default output formatter
     #
     try:
-        pss_run(roots=roots,
+        match_found = pss_run(
+                roots=roots,
                 pattern=pattern,
                 output_formatter=output_formatter,
                 only_find_files=only_find_files,
@@ -142,11 +155,17 @@ def main(argv=sys.argv, output_formatter=None):
                 do_heading=options.do_heading,
                 prefix_filename_to_file_matches=options.prefix_filename,
                 show_column_of_first_match=options.show_column,
+                universal_newlines=options.universal_newlines,
                 ncontext_before=ncontext_before,
                 ncontext_after=ncontext_after)
     except KeyboardInterrupt:
         print('<<interrupted - exiting>>')
-        sys.exit(0)
+        return 2
+    except Exception as err:
+        print('<<unexpected error: %s>>' % err)
+        return 2
+    else:
+        return 0 if match_found else 1
 
 
 DESCRIPTION = r'''
@@ -198,7 +217,7 @@ def parse_cmdline(cmdline_args):
         triple: options, args, parser -- the first two being the result of
         OptionParser.parse_args, and the third the parser object itself.`
     """
-    optparser = optparse.OptionParser(
+    optparser = PssOptionParser(
         usage='usage: %prog [options] <pattern> [files]',
         description=DESCRIPTION,
         prog='pss',
@@ -211,6 +230,12 @@ def parse_cmdline(cmdline_args):
     optparser.add_option('--help',
         action='store_true', dest='help',
         help='Display this information')
+
+    # This option is for internal usage by the bash completer, so we're hiding
+    # it from the --help output
+    optparser.add_option('--show-type-list',
+        action='store_true', dest='show_type_list',
+        help=optparse.SUPPRESS_HELP)
 
     group_searching = optparse.OptionGroup(optparser, 'Searching')
     group_searching.add_option('-i', '--ignore-case',
@@ -229,6 +254,9 @@ def parse_cmdline(cmdline_args):
     group_searching.add_option('-Q', '--literal',
         action='store_true', dest='literal', default=False,
         help='Quote all metacharacters; the pattern is literal')
+    group_searching.add_option('-U', '--universal-newlines',
+        action='store_true', dest='universal_newlines', default=False,
+        help='Use PEP 278 universal newline support when opening files')
     optparser.add_option_group(group_searching)
 
     group_output = optparse.OptionGroup(optparser, 'Search output')
@@ -370,6 +398,10 @@ def print_help_types():
     print()
 
 
+def show_type_list():
+    print(' '.join(('--%s' % typ) for typ in TYPE_MAP))
+
+
 def _splice_comma_names(namelist):
     """ Given a list of names, some of the names can be comma-separated lists.
         Return a new list of single names (names in comma-separated lists are
@@ -383,4 +415,19 @@ def _splice_comma_names(namelist):
             newlist.append(name)
     return newlist
 
+
+class PssOptionParser(optparse.OptionParser):
+    """Option parser that separates using --version from using invalid options.
+
+       By default optparse uses SystemExit with both. This parser uses custom
+       VersionPrinted exception with --version.
+    """
+
+    def print_version(self, file=None):
+        optparse.OptionParser.print_version(self, file)
+        raise VersionPrinted()
+
+
+class VersionPrinted(Exception):
+    pass
 
